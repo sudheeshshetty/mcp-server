@@ -19,6 +19,21 @@ function corsOptions(): cors.CorsOptions {
 
 await connectMcpClient({ retries: 30, retryDelayMs: 500 });
 
+async function warnIfSampleApiDown(): Promise<void> {
+  const base = (process.env.SAMPLE_API_URL ?? 'http://127.0.0.1:9000').replace(/\/+$/, '');
+  try {
+    const ok = (await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) })).ok;
+    if (!ok) {
+      console.error(`Sample API unhealthy at ${base} — list_employees will fail until you run pnpm dev:sample`);
+    }
+  } catch {
+    console.error(
+      `Sample API not reachable at ${base}. Employee tool needs it — run pnpm dev:sample or pnpm dev`,
+    );
+  }
+}
+void warnIfSampleApiDown();
+
 const app = express();
 app.use(cors(corsOptions()));
 app.use(express.json());

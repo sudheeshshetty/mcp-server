@@ -19,10 +19,17 @@ function sampleApiBase(): string {
 }
 
 async function fetchEmployees(): Promise<unknown> {
-  const res = await fetch(`${sampleApiBase()}/employees/list`);
+  const url = `${sampleApiBase()}/employees/list`;
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Cannot reach sample API at ${url}. Run: pnpm dev:sample (${msg})`);
+  }
   if (!res.ok) {
     throw new Error(
-      `Sample API ${res.status}: is sample-server running? (pnpm dev:sample)`,
+      `Sample API ${res.status} at ${url}. Is sample-server running? (pnpm dev:sample)`,
     );
   }
   return res.json();

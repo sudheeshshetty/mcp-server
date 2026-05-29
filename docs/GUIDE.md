@@ -192,27 +192,30 @@ pnpm build
 
 ## 5. Running locally
 
-### Minimal (chat only)
-
 Ensure Ollama is running and the model is pulled (`pnpm setup:ollama`), then:
 
+### Full demo (recommended)
+
+One command — mcp-server, chat-api, **sample-server**, and demo web (`pnpm dev` does not start Ollama):
+
 ```bash
-pnpm dev:mcp    # terminal 1 — or use pnpm dev for all services
+pnpm dev
+# same as pnpm dev:all
+```
+
+Open http://localhost:5174. The employee tool needs sample-server on `:9000`; `pnpm dev` starts it for you.
+
+### Minimal (no employee API)
+
+If you only need greetings / general chat and will not call `list_employees`:
+
+```bash
+pnpm dev:mcp    # terminal 1
 pnpm dev:api    # terminal 2
 pnpm dev:web    # optional demo UI :5174
 ```
 
-Or one command (starts mcp-server, chat-api, and web together; chat-api waits for MCP):
-
-```bash
-pnpm dev
-```
-
-### Full demo (with sample API)
-
-```bash
-pnpm dev:all
-```
+For employee questions, also run `pnpm dev:sample` in another terminal.
 
 ### Ports
 
@@ -238,7 +241,7 @@ curl -s -X POST http://127.0.0.1:8787/chat \
   -d '{"message":"List all employees"}' | jq
 ```
 
-For the last command, run `pnpm dev:sample` or `pnpm dev:all`.
+For the last command, ensure sample-server is running (`pnpm dev` or `pnpm dev:sample`).
 
 ### POST /chat API
 

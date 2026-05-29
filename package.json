@@ -5,7 +5,7 @@
   "description": "Embeddable MCP chat widget + Ollama host + MCP tool server template",
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm build && concurrently -n mcp,api,web -c magenta,blue,green \"pnpm dev:mcp\" \"pnpm dev:api\" \"pnpm dev:web\"",
+    "dev": "pnpm build && concurrently -n mcp,api,sample,web -c magenta,blue,yellow,green \"pnpm dev:mcp\" \"pnpm dev:api\" \"pnpm dev:sample\" \"pnpm dev:web\"",
     "dev:all": "pnpm build && concurrently -n mcp,api,sample,web -c magenta,blue,yellow,green \"pnpm dev:mcp\" \"pnpm dev:api\" \"pnpm dev:sample\" \"pnpm dev:web\"",
     "dev:mcp": "pnpm --filter @mcp-chat-template/mcp-server dev",
     "dev:api": "pnpm --filter @mcp-chat-template/chat-api dev",
