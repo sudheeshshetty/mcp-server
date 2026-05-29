@@ -29,6 +29,20 @@ app.get('/health', (_req, res) => {
 });
 
 const port = Number(process.env.SAMPLE_PORT ?? 9000);
-app.listen(port, '127.0.0.1', () => {
+const server = app.listen(port, '127.0.0.1', () => {
   console.error(`Sample API http://127.0.0.1:${port}/employees/list`);
+});
+
+server.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(
+      `Port ${port} is already in use (EADDRINUSE). ` +
+        `Another sample-server may still be running.\n` +
+        `  lsof -i :${port}\n` +
+        `  kill <PID>\n` +
+        `Or set a different SAMPLE_PORT in .env`,
+    );
+    process.exit(1);
+  }
+  throw err;
 });

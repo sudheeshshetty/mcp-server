@@ -287,17 +287,17 @@ chat-api serves it at `http://127.0.0.1:8787/chat-widget.js` after build.
   src="http://127.0.0.1:8787/chat-widget.js"
   data-api-url="http://127.0.0.1:8787"
   data-title="My Chat"
-  data-container="mcp-chat"
   defer
 ></script>
-<div id="mcp-chat"></div>
 ```
+
+By default the widget adds a **floating chat bubble** at the bottom-right of the page. Click it to open the chat panel.
 
 | Attribute | Meaning |
 |-----------|---------|
 | `data-api-url` | chat-api base URL (**required** for cross-origin) |
-| `data-title` | Header title |
-| `data-container` | DOM id to mount into (default `mcp-chat`) |
+| `data-title` | Panel header title |
+| `data-container` | Optional DOM id to mount into (otherwise appends to `body`) |
 
 ### Programmatic API
 

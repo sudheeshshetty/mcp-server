@@ -1,9 +1,9 @@
 /**
  * MCP host agent loop:
  * - Loads tools from MCP server (list_tools)
- * - Sends them to Ollama (Llama)
+ * - Sends every user message to Ollama with those tools available
  * - When Ollama returns tool_calls, runs call_tool on MCP server
- * - Llama writes the final plain-language reply
+ * - Returns Llama's final plain-language reply
  */
 
 import { callMcpTool, getOllamaToolsFromMcp } from './mcp-client.js';
@@ -14,15 +14,56 @@ const model = () => (process.env.OLLAMA_MODEL ?? 'llama3.1').trim();
 
 const SYSTEM = `You are a friendly assistant.
 
-Always write a direct reply to the user in the "content" field. Never say "no response needed".
+Always write a direct reply to the user in the "content" field when you are not calling tools.
 
-Use list_employees ONLY when the user asks about employees, staff, or team members.
-For greetings (hi, hello), thanks, or general chat — reply warmly WITHOUT calling any tool.
+When the user's question needs data from a tool, call the appropriate tool. After tool results arrive, summarize for the user in plain language using only facts from those results.
 
-After tool results, summarize in plain English. Use ONLY names and facts from the tool JSON — never invent employees or data.`;
+Never put tool-call JSON in "content". Use the tool-calling API for tools.`;
 
 const BAD_REPLY =
   /no response is needed|no response needed|do not respond|don't respond|i will not respond|no need to respond|no tools? (are|were) (required|needed)/i;
+
+type OllamaToolCall = { function: { name: string; arguments: unknown } };
+
+/** Llama sometimes emits tool JSON in content instead of tool_calls. */
+export function looksLikeToolJsonInContent(content: string): boolean {
+  const t = content.trim();
+  if (!t.startsWith('{') && !t.startsWith('[')) return false;
+  try {
+    const parsed: unknown = JSON.parse(t);
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    return items.some(
+      (item) =>
+        item &&
+        typeof item === 'object' &&
+        'name' in item &&
+        ('parameters' in item || 'arguments' in item),
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function parseToolCallsFromContent(content: string | undefined): OllamaToolCall[] {
+  if (!content?.trim() || !looksLikeToolJsonInContent(content)) return [];
+  try {
+    const parsed: unknown = JSON.parse(content.trim());
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    return items
+      .filter(
+        (item): item is Record<string, unknown> =>
+          !!item && typeof item === 'object' && typeof (item as { name?: unknown }).name === 'string',
+      )
+      .map((item) => ({
+        function: {
+          name: String(item.name),
+          arguments: item.parameters ?? item.arguments ?? {},
+        },
+      }));
+  } catch {
+    return [];
+  }
+}
 
 function parseArgs(raw: unknown): Record<string, unknown> {
   if (typeof raw === 'string') {
@@ -35,60 +76,19 @@ function parseArgs(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
 }
 
-type EmployeeRow = { name?: string; role?: string; department?: string };
-
-/** Format list_employees JSON so the UI always shows real API data, not model guesses. */
-export function formatListEmployeesReply(toolContent: string): string | null {
-  try {
-    const data = JSON.parse(toolContent) as { employees?: EmployeeRow[] };
-    const employees = data.employees;
-    if (!Array.isArray(employees) || employees.length === 0) return null;
-
-    const lines = employees.map((e, i) => {
-      const name = e.name?.trim() || 'Unknown';
-      const meta = [e.role, e.department].filter(Boolean).join(', ');
-      return meta ? `${i + 1}. ${name} (${meta})` : `${i + 1}. ${name}`;
-    });
-
-    return `Here are ${employees.length} employees:\n\n${lines.join('\n')}`;
-  } catch {
-    return null;
+function mergeToolCalls(
+  fromApi: OllamaToolCall[] | undefined,
+  fromContent: OllamaToolCall[],
+): OllamaToolCall[] {
+  const seen = new Set<string>();
+  const merged: OllamaToolCall[] = [];
+  for (const call of [...(fromApi ?? []), ...fromContent]) {
+    const key = `${call.function.name}:${JSON.stringify(call.function.arguments)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(call);
   }
-}
-
-function isListEmployeesRound(calls: Array<{ function: { name: string } }>): boolean {
-  return calls.length > 0 && calls.every((c) => c.function.name === 'list_employees');
-}
-
-/**
- * After list_employees runs, always return a host-authored reply (never ask Ollama to
- * interpret tool errors — it often invents "no employees in database").
- */
-function finalizeListEmployees(
-  calls: Array<{ function: { name: string } }>,
-  results: string[],
-): string | null {
-  if (calls.length !== results.length || !isListEmployeesRound(calls)) return null;
-
-  const errors = results.filter((r) => r.startsWith('Error:'));
-  if (errors.length > 0) {
-    const detail = errors[0]!.replace(/^Error:\s*/, '');
-    return (
-      `Could not load the employee directory.\n\n` +
-      `${detail}\n\n` +
-      `Start the sample API: run \`pnpm dev:sample\` or use \`pnpm dev\` / \`pnpm dev:all\`.`
-    );
-  }
-
-  const parts = results.map((r) => formatListEmployeesReply(r)).filter(Boolean);
-  if (parts.length === results.length) {
-    return parts.join('\n\n');
-  }
-
-  return (
-    `Received employee data but could not parse it. ` +
-    `Check that sample-server is running (\`pnpm dev:sample\`).`
-  );
+  return merged;
 }
 
 async function ollamaChat(body: Record<string, unknown>) {
@@ -108,26 +108,14 @@ async function ollamaChat(body: Record<string, unknown>) {
   return (await res.json()) as {
     message?: {
       content?: string;
-      tool_calls?: Array<{ function: { name: string; arguments: unknown } }>;
+      tool_calls?: OllamaToolCall[];
     };
   };
 }
 
-async function chatPlain(userMessage: string): Promise<string> {
-  const { message } = await ollamaChat({
-    messages: [
-      {
-        role: 'system',
-        content: 'You are a friendly assistant. Reply directly and briefly.',
-      },
-      { role: 'user', content: userMessage },
-    ],
-  });
-  return (message?.content ?? '').trim();
-}
-
 export async function chat(userMessage: string): Promise<{ reply: string; toolsUsed: string[] }> {
   const ollamaTools = await getOllamaToolsFromMcp();
+  const knownTools = new Set(ollamaTools.map((t) => t.function.name));
   const toolsUsed: string[] = [];
   const messages: Array<Record<string, unknown>> = [
     { role: 'system', content: SYSTEM },
@@ -138,10 +126,18 @@ export async function chat(userMessage: string): Promise<{ reply: string; toolsU
     const { message } = await ollamaChat({ messages, tools: ollamaTools });
     if (!message) throw new Error('Empty Ollama response');
 
-    const calls = message.tool_calls;
-    if (calls?.length) {
-      messages.push({ role: 'assistant', content: message.content ?? '', tool_calls: calls });
-      const toolResults: string[] = [];
+    const rawCalls = mergeToolCalls(
+      message.tool_calls,
+      parseToolCallsFromContent(message.content),
+    );
+    const calls = rawCalls.filter((c) => knownTools.has(c.function.name));
+
+    if (calls.length > 0) {
+      const assistantContent = looksLikeToolJsonInContent(message.content ?? '')
+        ? ''
+        : (message.content ?? '');
+      messages.push({ role: 'assistant', content: assistantContent, tool_calls: calls });
+
       for (const { function: fn } of calls) {
         toolsUsed.push(fn.name);
         let text: string;
@@ -151,26 +147,23 @@ export async function chat(userMessage: string): Promise<{ reply: string; toolsU
           const err = e instanceof Error ? e.message : String(e);
           text = `Error: ${err}`;
         }
-        toolResults.push(text);
-        // Ollama requires tool_name so the model links results to the call (see docs.ollama.com tool calling).
         messages.push({ role: 'tool', tool_name: fn.name, content: text });
-      }
-
-      const employeeReply = finalizeListEmployees(calls, toolResults);
-      if (employeeReply) {
-        return { reply: employeeReply, toolsUsed };
       }
       continue;
     }
 
-    let reply = (message.content ?? '').trim();
-    if (!reply || BAD_REPLY.test(reply)) {
-      if (toolsUsed.length > 0) {
-        throw new Error('Empty reply from Ollama after tool results');
+    const reply = (message.content ?? '').trim();
+    const needsRetry =
+      !reply || BAD_REPLY.test(reply) || looksLikeToolJsonInContent(reply);
+
+    if (needsRetry) {
+      if (round >= 7) {
+        throw new Error('Model returned no usable reply after tool rounds');
       }
-      reply = await chatPlain(userMessage);
+      messages.push({ role: 'assistant', content: looksLikeToolJsonInContent(reply) ? '' : reply });
+      continue;
     }
-    if (!reply) throw new Error('Empty reply from Ollama');
+
     return { reply, toolsUsed };
   }
 

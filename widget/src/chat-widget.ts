@@ -13,13 +13,18 @@ type ChatMessage = {
 };
 
 const DEFAULT_API = 'http://localhost:8787';
+const WIDGET_ROOT_ID = 'mcp-chat-widget';
+
+const CHAT_ICON = `<svg class="mcp-chat__launcher-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <path d="M20 2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4l4 4 4-4h4c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z" fill="currentColor"/>
+</svg>`;
 
 export function mountChatWidget(
   container: HTMLElement,
   options: ChatWidgetOptions = {},
 ): () => void {
   const apiUrl = (options.apiUrl ?? DEFAULT_API).replace(/\/+$/, '');
-  const title = options.title ?? 'MCP Chat';
+  const title = options.title ?? 'Chat';
 
   container.innerHTML = '';
 
@@ -31,29 +36,52 @@ export function mountChatWidget(
     document.head.appendChild(link);
   }
 
-  const root = document.createElement('div');
-  root.className = 'mcp-chat';
-  root.innerHTML = `
-    <header class="mcp-chat__header">
-      <h1 class="mcp-chat__title"></h1>
-      <p class="mcp-chat__subtitle">Ollama + MCP tools</p>
-    </header>
-    <div class="mcp-chat__messages" role="log" aria-live="polite"></div>
-    <form class="mcp-chat__form">
-      <input type="text" class="mcp-chat__input" placeholder="Say hi or ask about employees…" autocomplete="off" />
-      <button type="submit" class="mcp-chat__send">Send</button>
-    </form>
+  const shell = document.createElement('div');
+  shell.className = 'mcp-chat-widget';
+  shell.innerHTML = `
+    <button type="button" class="mcp-chat__launcher" aria-label="Open chat" aria-expanded="false">
+      ${CHAT_ICON}
+    </button>
+    <div class="mcp-chat" role="dialog" aria-label="${title}" aria-hidden="true">
+      <header class="mcp-chat__header">
+        <div class="mcp-chat__header-text">
+          <h2 class="mcp-chat__title"></h2>
+          <p class="mcp-chat__subtitle">Ollama + MCP tools</p>
+        </div>
+        <button type="button" class="mcp-chat__close" aria-label="Close chat">&times;</button>
+      </header>
+      <div class="mcp-chat__messages" role="log" aria-live="polite"></div>
+      <form class="mcp-chat__form">
+        <input type="text" class="mcp-chat__input" placeholder="Say hi or ask about employees…" autocomplete="off" />
+        <button type="submit" class="mcp-chat__send">Send</button>
+      </form>
+    </div>
   `;
 
-  const titleEl = root.querySelector('.mcp-chat__title') as HTMLElement;
+  const launcher = shell.querySelector('.mcp-chat__launcher') as HTMLButtonElement;
+  const panel = shell.querySelector('.mcp-chat') as HTMLElement;
+  const closeBtn = shell.querySelector('.mcp-chat__close') as HTMLButtonElement;
+  const titleEl = shell.querySelector('.mcp-chat__title') as HTMLElement;
+  const messagesEl = shell.querySelector('.mcp-chat__messages') as HTMLElement;
+  const form = shell.querySelector('.mcp-chat__form') as HTMLFormElement;
+  const input = shell.querySelector('.mcp-chat__input') as HTMLInputElement;
+  const sendBtn = shell.querySelector('.mcp-chat__send') as HTMLButtonElement;
+
   titleEl.textContent = title;
 
-  const messagesEl = root.querySelector('.mcp-chat__messages') as HTMLElement;
-  const form = root.querySelector('.mcp-chat__form') as HTMLFormElement;
-  const input = root.querySelector('.mcp-chat__input') as HTMLInputElement;
-  const sendBtn = root.querySelector('.mcp-chat__send') as HTMLButtonElement;
-
   const messages: ChatMessage[] = [];
+  let isOpen = false;
+
+  function setOpen(open: boolean) {
+    isOpen = open;
+    shell.classList.toggle('mcp-chat-widget--open', open);
+    panel.classList.toggle('mcp-chat--open', open);
+    panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+    launcher.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      input.focus();
+    }
+  }
 
   function render() {
     messagesEl.innerHTML = '';
@@ -109,17 +137,25 @@ export function mountChatWidget(
     }
   }
 
+  launcher.addEventListener('click', () => setOpen(true));
+  closeBtn.addEventListener('click', () => setOpen(false));
+
+  const onKeydown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && isOpen) setOpen(false);
+  };
+  document.addEventListener('keydown', onKeydown);
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const text = input.value.trim();
     if (text) void send(text);
   });
 
-  container.appendChild(root);
+  container.appendChild(shell);
   render();
-  input.focus();
 
   return () => {
+    document.removeEventListener('keydown', onKeydown);
     container.innerHTML = '';
   };
 }
@@ -131,17 +167,28 @@ function findWidgetScript(): HTMLScriptElement | null {
   return scripts.length ? (scripts[scripts.length - 1] as HTMLScriptElement) : null;
 }
 
+function resolveMountContainer(script: HTMLScriptElement | null): HTMLElement {
+  const containerId = script?.dataset.container;
+  if (containerId) {
+    const el = document.getElementById(containerId);
+    if (el) return el;
+    console.warn(`[McpChatWidget] No element #${containerId}, using floating widget`);
+  }
+
+  let el = document.getElementById(WIDGET_ROOT_ID);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = WIDGET_ROOT_ID;
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
 function autoInit(): void {
   const script = (document.currentScript as HTMLScriptElement | null) ?? findWidgetScript();
   const apiUrl = script?.dataset.apiUrl ?? DEFAULT_API;
   const title = script?.dataset.title;
-  const containerId = script?.dataset.container ?? 'mcp-chat';
-  const el = document.getElementById(containerId);
-  if (!el) {
-    console.warn(`[McpChatWidget] No element #${containerId}`);
-    return;
-  }
-  mountChatWidget(el, { apiUrl, title });
+  mountChatWidget(resolveMountContainer(script), { apiUrl, title });
 }
 
 if (typeof window !== 'undefined') {
